@@ -245,5 +245,63 @@ def get_next_concept_to_review(conn):
     return cur.fetchone()
 
 
+def get_topic_mastery(conn, topic_id):
+    """
+    Calculate the mastery of a topic as the average retrievability of its concepts.
+    Concepts that have not been reviewed are excluded from the calculation.
+    """
+    fsrs = FSRS(default_params)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            c.id,
+            ld.stability
+        FROM concepts c
+        JOIN learning_data ld ON c.id = ld.concept_id
+        WHERE c.topic_id = ?
+    """, (topic_id,))
+
+    rows = cur.fetchall()
+
+    total_retrievability = 0
+    reviewed_concepts_count = 0
+
+    for concept_id, stability in rows:
+        # Find the last review timestamp for this concept
+        cur.execute("""
+            SELECT MAX(timestamp)
+            FROM recall_sessions
+            WHERE concept_id = ?
+        """, (concept_id,))
+        last_review_str = cur.fetchone()[0]
+
+        if last_review_str:
+            last_review_date = datetime.datetime.fromisoformat(last_review_str)
+            days_since_review = (datetime.datetime.now() - last_review_date).days
+            retrievability = fsrs.retrievability(days_since_review, stability)
+            total_retrievability += retrievability
+            reviewed_concepts_count += 1
+
+    if reviewed_concepts_count == 0:
+        return 0.0
+
+    return total_retrievability / reviewed_concepts_count
+
+
+def get_all_topics_with_mastery(conn):
+    """
+    Get all topics with their calculated mastery score.
+    """
+    topics = get_all_topics(conn)
+    topics_with_mastery = []
+    for topic in topics:
+        topic_id, topic_name = topic
+        mastery = get_topic_mastery(conn, topic_id)
+        topics_with_mastery.append((topic_id, topic_name, mastery))
+
+    return topics_with_mastery
+
+
 if __name__ == '__main__':
     main()
