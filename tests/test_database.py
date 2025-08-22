@@ -41,7 +41,8 @@ def test_tables_creation(db_connection):
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = sorted([row[0] for row in cursor.fetchall()])
 
-    expected_tables = sorted(['topics', 'concepts', 'recall_sessions', 'learning_data'])
+    expected_tables = sorted(['topics', 'concepts', 'recall_sessions', 'learning_data',
+                              'knowledge_areas', 'learning_techniques', 'concept_learning_progress'])
 
     assert tables == expected_tables
 
