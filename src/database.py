@@ -1,4 +1,5 @@
 import sqlite3
+import os
 
 def create_connection(db_file):
     """ create a database connection to the SQLite database
@@ -8,6 +9,8 @@ def create_connection(db_file):
     """
     conn = None
     try:
+        # ensure the directory exists
+        os.makedirs(os.path.dirname(db_file), exist_ok=True)
         conn = sqlite3.connect(db_file)
         return conn
     except sqlite3.Error as e:
@@ -79,6 +82,62 @@ def main():
         conn.close()
     else:
         print("Error! cannot create the database connection.")
+
+def add_topic(conn, topic_name):
+    """
+    Add a new topic to the topics table
+    :param conn:
+    :param topic_name:
+    :return: topic id
+    """
+    sql = ''' INSERT INTO topics(name)
+              VALUES(?) '''
+    cur = conn.cursor()
+    cur.execute(sql, (topic_name,))
+    conn.commit()
+    return cur.lastrowid
+
+def get_all_topics(conn):
+    """
+    Query all rows in the topics table
+    :param conn: the Connection object
+    :return:
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM topics")
+
+    rows = cur.fetchall()
+
+    return rows
+
+def add_concept(conn, topic_id, content):
+    """
+    Add a new concept to the concepts table
+    :param conn:
+    :param topic_id:
+    :param content:
+    :return: concept id
+    """
+    sql = ''' INSERT INTO concepts(topic_id, content)
+              VALUES(?,?) '''
+    cur = conn.cursor()
+    cur.execute(sql, (topic_id, content))
+    conn.commit()
+    return cur.lastrowid
+
+def get_concepts_for_topic(conn, topic_id):
+    """
+    Query all concepts for a given topic
+    :param conn: the Connection object
+    :param topic_id:
+    :return:
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM concepts WHERE topic_id=?", (topic_id,))
+
+    rows = cur.fetchall()
+
+    return rows
 
 if __name__ == '__main__':
     main()
