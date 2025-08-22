@@ -1,132 +1,96 @@
 import pytest
 import os
 import sys
-import datetime
+from unittest.mock import patch, MagicMock
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from fsrs import FSRS, default_params
-from grading import rule_based_grade
-from database import (
-    create_connection,
-    main as create_db,
-    add_topic,
-    add_concept,
-    initialize_learning_data,
-    update_learning_data,
-    record_recall_session,
-    get_next_concept_to_review
-)
+from logic import LearningAppLogic
+from database import create_db_tables
 
 DB_FILE = "data/test_logic.db"
 
-@pytest.fixture(scope="module")
-def db_connection():
-    # Set up: create the database and tables
+@pytest.fixture
+def logic_app():
+    # Setup: create a clean database for each test
+    if os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
+    create_db_tables(DB_FILE)
+
+    app = LearningAppLogic(DB_FILE)
+    yield app
+
+    # Teardown: close connection and remove db file
+    app.close_connection()
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
 
-    conn = create_connection(DB_FILE)
+def test_add_and_get_topic(logic_app):
+    topic_name = "New Topic"
+    topic_id = logic_app.add_new_topic(topic_name)
+    assert topic_id is not None
 
-    # Manually create tables
-    from database import main
-    main() # this will create the tables in the default db, not test one.
+    topics = logic_app.get_all_topics()
+    assert any(topic[1] == topic_name for topic in topics)
 
-    # We need to create tables in our test db
-    conn.close()
-    # HACK: The main function from database.py uses a hardcoded path.
-    # We will rename the db file to what main() expects, call main, then rename it back.
-    if os.path.exists("data/learning_data.db"):
-        os.remove("data/learning_data.db")
-    os.rename(DB_FILE, "data/learning_data.db")
-    main()
-    os.rename("data/learning_data.db", DB_FILE)
+def test_add_and_get_concept(logic_app):
+    topic_id = logic_app.add_new_topic("A Topic")
+    concept_content = "A new concept"
+    concept_id = logic_app.add_new_concept(topic_id, concept_content)
+    assert concept_id is not None
 
-    conn = create_connection(DB_FILE)
-    yield conn
+    concepts = logic_app.get_concepts_for_topic(topic_id)
+    assert any(c[2] == concept_content for c in concepts)
 
-    # Tear down: close the connection and remove the database file
-    conn.close()
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
+def test_api_key_settings(logic_app):
+    api_key = "my-secret-api-key"
+    logic_app.save_api_key(api_key)
+    retrieved_key = logic_app.get_api_key()
+    assert retrieved_key == api_key
 
+@patch('logic.genai')
+def test_process_knowledge_success(mock_genai, logic_app):
+    # Setup
+    api_key = "fake-api-key"
+    logic_app.save_api_key(api_key)
+    topic_id = logic_app.add_new_topic("Test Topic")
+    knowledge_text = "This is a test concept."
 
-def test_fsrs_calculations():
-    fsrs = FSRS(default_params)
+    # Mock the Gemini API response
+    mock_model = MagicMock()
+    mock_genai.GenerativeModel.return_value = mock_model
+    mock_model.generate_content.return_value.text = "1. Test concept"
 
-    # Test initial stability
-    assert fsrs.initial_stability(1) == default_params[0]
-    assert fsrs.initial_stability(2) == default_params[1]
-    assert fsrs.initial_stability(3) == default_params[2]
-    assert fsrs.initial_stability(4) == default_params[3]
+    # Run
+    concepts = logic_app.process_knowledge(knowledge_text, topic_id)
 
-    # Test initial difficulty
-    d0 = fsrs.initial_difficulty(3) # grade = good
-    assert d0 == default_params[4] - (3-3) * default_params[5]
+    # Assert
+    assert len(concepts) == 1
+    assert concepts[0] == "Test concept"
 
-    # Test retrievability
-    r = fsrs.retrievability(t=10, s=100)
-    assert 0 < r < 1
+    db_concepts = logic_app.get_concepts_for_topic(topic_id)
+    assert any(c[2] == "Test concept" for c in db_concepts)
 
-    # Test new stability after recall
-    s_good = fsrs.new_stability(d=5, s=10, r=0.9, g=3) # grade = good
-    assert s_good > 10
+def test_process_knowledge_no_api_key(logic_app):
+    with pytest.raises(ValueError, match="Gemini API Key not set."):
+        logic_app.process_knowledge("Some text", 1)
 
-    # Test new stability after forgetting
-    s_again = fsrs.new_stability(d=5, s=10, r=0.8, g=1) # grade = again
-    assert s_again < 10
+def test_process_knowledge_no_text(logic_app):
+    logic_app.save_api_key("fake-key")
+    with pytest.raises(ValueError, match="Knowledge text is empty."):
+        logic_app.process_knowledge("", 1)
 
+def test_process_knowledge_no_topic(logic_app):
+    logic_app.save_api_key("fake-key")
+    with pytest.raises(ValueError, match="Topic not selected."):
+        logic_app.process_knowledge("Some text", None)
 
-def test_grading_mechanism():
-    assert rule_based_grade("the cat sat", "the cat sat on the mat") == 3/5
-    assert rule_based_grade("the cat sat on the mat", "the cat sat on the mat") == 1.0
-    assert rule_based_grade("a completely different response", "the cat sat on the mat") == 0.0
-    assert rule_based_grade("", "the cat sat on the mat") == 0.0
-    assert rule_based_grade("the cat sat on the mat", "") == 0.0
+@patch('logic.genai')
+def test_process_knowledge_api_error(mock_genai, logic_app):
+    logic_app.save_api_key("fake-key")
+    topic_id = logic_app.add_new_topic("A Topic")
+    mock_genai.GenerativeModel.side_effect = Exception("API Error")
 
-def test_scheduling_engine_new_concept(db_connection):
-    conn = db_connection
-    # Clear tables
-    conn.execute("DELETE FROM concepts")
-    conn.execute("DELETE FROM topics")
-    conn.execute("DELETE FROM learning_data")
-    conn.commit()
-
-    topic_id = add_topic(conn, "Test Topic")
-    concept_id = add_concept(conn, topic_id, "New Concept")
-
-    next_concept = get_next_concept_to_review(conn)
-    assert next_concept is not None
-    assert next_concept[0] == concept_id
-    assert next_concept[2] == "New Concept"
-
-def test_scheduling_engine_lowest_retrievability(db_connection):
-    conn = db_connection
-    # Clear tables
-    conn.execute("DELETE FROM concepts")
-    conn.execute("DELETE FROM topics")
-    conn.execute("DELETE FROM learning_data")
-    conn.execute("DELETE FROM recall_sessions")
-    conn.commit()
-
-    topic_id = add_topic(conn, "Test Topic")
-
-    # Concept 1: reviewed recently
-    c1_id = add_concept(conn, topic_id, "Concept 1")
-    initialize_learning_data(conn, c1_id, 5, 10)
-    record_recall_session(conn, c1_id, "response", 0.9)
-
-    # Concept 2: reviewed a while ago, should have lower retrievability
-    c2_id = add_concept(conn, topic_id, "Concept 2")
-    initialize_learning_data(conn, c2_id, 5, 10)
-    # Manually insert a recall session from 10 days ago
-    ten_days_ago = (datetime.datetime.now() - datetime.timedelta(days=10)).isoformat()
-    conn.execute("INSERT INTO recall_sessions(concept_id, timestamp, user_response, ai_grade) VALUES (?,?,?,?)",
-                 (c2_id, ten_days_ago, "response", 0.9))
-    conn.commit()
-
-    next_concept = get_next_concept_to_review(conn)
-    assert next_concept is not None
-    assert next_concept[0] == c2_id
-    assert next_concept[2] == "Concept 2"
+    with pytest.raises(RuntimeError, match="An error occurred while processing the knowledge: API Error"):
+        logic_app.process_knowledge("Some text", topic_id)

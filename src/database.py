@@ -30,8 +30,8 @@ def create_table(conn, create_table_sql):
     except sqlite3.Error as e:
         print(e)
 
-def main():
-    database = "data/learning_data.db"
+def create_db_tables(db_file):
+    database = db_file
 
     sql_create_topics_table = """ CREATE TABLE IF NOT EXISTS topics (
                                         id integer PRIMARY KEY,
@@ -62,6 +62,11 @@ def main():
                                             FOREIGN KEY (concept_id) REFERENCES concepts (id)
                                         );"""
 
+    sql_create_settings_table = """CREATE TABLE IF NOT EXISTS settings (
+                                       key TEXT PRIMARY KEY,
+                                       value TEXT NOT NULL
+                                   );"""
+
     # create a database connection
     conn = create_connection(database)
 
@@ -78,6 +83,9 @@ def main():
 
         # create learning_data table
         create_table(conn, sql_create_learning_data_table)
+
+        # create settings table
+        create_table(conn, sql_create_settings_table)
 
         conn.close()
     else:
@@ -320,5 +328,35 @@ def get_all_topics_with_mastery(conn):
     return topics_with_mastery
 
 
+def set_setting(conn, key, value):
+    """
+    Set a setting in the settings table.
+    :param conn:
+    :param key:
+    :param value:
+    """
+    sql = ''' INSERT OR REPLACE INTO settings(key, value)
+              VALUES(?,?) '''
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (key, value))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(e)
+
+def get_setting(conn, key):
+    """
+    Get a setting from the settings table.
+    :param conn:
+    :param key:
+    :return: The value of the setting or None
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+
+    row = cur.fetchone()
+
+    return row[0] if row else None
+
 if __name__ == '__main__':
-    main()
+    create_db_tables("data/learning_data.db")

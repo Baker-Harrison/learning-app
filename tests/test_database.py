@@ -6,7 +6,7 @@ import pytest
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from database import create_connection, main as create_db, add_topic, get_all_topics, add_concept, get_concepts_for_topic
+from database import create_connection, create_db_tables, add_topic, get_all_topics, add_concept, get_concepts_for_topic
 
 DB_FILE = "data/learning_data.db"
 
@@ -16,7 +16,7 @@ def db_connection():
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
 
-    create_db()
+    create_db_tables(DB_FILE)
 
     conn = create_connection(DB_FILE)
     yield conn
@@ -29,7 +29,7 @@ def db_connection():
 def test_database_file_creation():
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
-    create_db()
+    create_db_tables(DB_FILE)
     assert os.path.exists(DB_FILE)
     os.remove(DB_FILE)
 
@@ -41,7 +41,7 @@ def test_tables_creation(db_connection):
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = sorted([row[0] for row in cursor.fetchall()])
 
-    expected_tables = sorted(['topics', 'concepts', 'recall_sessions', 'learning_data'])
+    expected_tables = sorted(['topics', 'concepts', 'recall_sessions', 'learning_data', 'settings'])
 
     assert tables == expected_tables
 
@@ -141,3 +141,19 @@ def test_get_concepts_for_topic(db_connection):
 
     retrieved_concept_contents = sorted([row[2] for row in retrieved_concepts])
     assert retrieved_concept_contents == sorted(concepts)
+
+def test_settings(db_connection):
+    from database import set_setting, get_setting
+    # Test setting a value
+    set_setting(db_connection, "test_key", "test_value")
+    value = get_setting(db_connection, "test_key")
+    assert value == "test_value"
+
+    # Test updating a value
+    set_setting(db_connection, "test_key", "new_value")
+    value = get_setting(db_connection, "test_key")
+    assert value == "new_value"
+
+    # Test getting a non-existent key
+    value = get_setting(db_connection, "non_existent_key")
+    assert value is None

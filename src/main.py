@@ -1,9 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from database import (create_connection, add_topic, get_all_topics,
-                    add_concept, get_concepts_for_topic, get_all_topics_with_mastery)
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from logic import LearningAppLogic
 
 DB_FILE = "data/learning_data.db"
 
@@ -39,11 +36,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("Learning App")
         self.geometry("800x600")
-        self.conn = create_connection(DB_FILE)
-        if self.conn is None:
-            messagebox.showerror("Database Error", f"Could not create or connect to the database at {DB_FILE}")
-            self.destroy()
-            return
+        self.logic = LearningAppLogic(DB_FILE)
         self.create_widgets()
         self.populate_topics_list()
 
@@ -61,10 +54,14 @@ class App(tk.Tk):
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.create_dashboard_widgets(self.dashboard_tab)
 
+        # --- Settings Tab ---
+        self.settings_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.settings_tab, text="Settings")
+        self.create_settings_widgets(self.settings_tab)
+
         # --- Status Bar ---
         self.status_bar = tk.Label(self, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-
 
     def create_management_widgets(self, parent_frame):
         # Main frames
@@ -110,7 +107,64 @@ class App(tk.Tk):
         back_button.pack(pady=5)
         Tooltip(back_button, "Return to the topic list")
 
+    def create_settings_widgets(self, parent_frame):
+        # --- Gemini API Key ---
+        api_key_frame = ttk.LabelFrame(parent_frame, text="Gemini API Key")
+        api_key_frame.pack(padx=10, pady=10, fill="x")
+
+        self.api_key_entry = ttk.Entry(api_key_frame, width=60, show="*")
+        self.api_key_entry.pack(side="left", padx=5, pady=5)
+        self.api_key_entry.insert(0, self.logic.get_api_key() or "")
+        Tooltip(self.api_key_entry, "Enter your Gemini API Key")
+
+        save_api_key_button = ttk.Button(api_key_frame, text="Save", command=self.save_api_key)
+        save_api_key_button.pack(side="left", padx=5, pady=5)
+        Tooltip(save_api_key_button, "Save the API Key")
+
+        # --- Knowledge Input ---
+        knowledge_frame = ttk.LabelFrame(parent_frame, text="Add Knowledge from Text")
+        knowledge_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        self.knowledge_text = tk.Text(knowledge_frame, height=15, width=80)
+        self.knowledge_text.pack(padx=5, pady=5, fill="both", expand=True)
+        Tooltip(self.knowledge_text, "Paste a block of text to be processed into concepts")
+
+        process_knowledge_button = ttk.Button(knowledge_frame, text="Process Knowledge", command=self.process_knowledge)
+        process_knowledge_button.pack(pady=5)
+        Tooltip(process_knowledge_button, "Use Gemini to extract concepts from the text")
+
+    def save_api_key(self):
+        api_key = self.api_key_entry.get()
+        if api_key:
+            self.logic.save_api_key(api_key)
+            messagebox.showinfo("Settings", "API Key saved successfully.")
+            self.status_bar.config(text="API Key saved.")
+        else:
+            messagebox.showwarning("Settings", "API Key cannot be empty.")
+
+    def process_knowledge(self):
+        knowledge_text = self.knowledge_text.get("1.0", tk.END).strip()
+
+        if not self.logic.selected_topic:
+            messagebox.showwarning("Warning", "Please select a topic first from the Management tab.")
+            return
+
+        try:
+            concepts = self.logic.process_knowledge(knowledge_text, self.logic.selected_topic[0])
+            if concepts:
+                self.populate_concepts_list()
+                self.knowledge_text.delete("1.0", tk.END)
+                self.status_bar.config(text=f"{len(concepts)} concepts added to '{self.logic.selected_topic[1]}'.")
+                messagebox.showinfo("Success", f"Successfully added {len(concepts)} new concepts.")
+            else:
+                messagebox.showinfo("Info", "No concepts were extracted. Try rephrasing your text.")
+
+        except (ValueError, RuntimeError) as e:
+            messagebox.showerror("Error", str(e))
+
     def create_dashboard_widgets(self, parent_frame):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         self.fig = Figure(figsize=(5, 4), dpi=100)
         self.ax = self.fig.add_subplot(111)
 
@@ -130,8 +184,7 @@ class App(tk.Tk):
 
     def update_dashboard(self):
         self.ax.clear()
-
-        topics_with_mastery = get_all_topics_with_mastery(self.conn)
+        topics_with_mastery = self.logic.get_all_topics_with_mastery()
 
         if not topics_with_mastery:
             self.ax.set_title("No topics to display")
@@ -146,19 +199,18 @@ class App(tk.Tk):
         self.ax.set_ylabel("Mastery Score")
         self.ax.set_ylim(0, 1)
         self.fig.tight_layout()
-
         self.canvas.draw()
 
     def populate_topics_list(self):
         self.topics_listbox.delete(0, tk.END)
-        self.topics_data = get_all_topics(self.conn)
+        self.topics_data = self.logic.get_all_topics()
         for topic in self.topics_data:
             self.topics_listbox.insert(tk.END, topic[1])
 
     def add_new_topic(self):
         topic_name = self.topic_entry.get()
         if topic_name:
-            if add_topic(self.conn, topic_name) is None:
+            if self.logic.add_new_topic(topic_name) is None:
                 messagebox.showerror("Database Error", "Failed to add the new topic.")
                 self.status_bar.config(text=f"Error: Failed to add topic '{topic_name}'")
             else:
@@ -170,25 +222,23 @@ class App(tk.Tk):
         selection_indices = self.topics_listbox.curselection()
         if not selection_indices:
             return
-
         selected_index = selection_indices[0]
-        self.selected_topic = self.topics_data[selected_index]
-
+        self.logic.selected_topic = self.topics_data[selected_index]
         self.topic_selection_frame.pack_forget()
         self.concept_management_frame.pack(fill="both", expand=True)
         self.populate_concepts_list()
 
     def populate_concepts_list(self):
         self.concepts_listbox.delete(0, tk.END)
-        if hasattr(self, 'selected_topic'):
-            concepts = get_concepts_for_topic(self.conn, self.selected_topic[0])
+        if self.logic.selected_topic:
+            concepts = self.logic.get_concepts_for_topic(self.logic.selected_topic[0])
             for concept in concepts:
                 self.concepts_listbox.insert(tk.END, concept[2])
 
     def add_new_concept(self):
         concept_content = self.concept_entry.get()
-        if concept_content and hasattr(self, 'selected_topic'):
-            if add_concept(self.conn, self.selected_topic[0], concept_content) is None:
+        if concept_content and self.logic.selected_topic:
+            if self.logic.add_new_concept(self.logic.selected_topic[0], concept_content) is None:
                 messagebox.showerror("Database Error", "Failed to add the new concept.")
                 self.status_bar.config(text="Error: Failed to add new concept.")
             else:
@@ -199,14 +249,11 @@ class App(tk.Tk):
     def show_topic_selection(self):
         self.concept_management_frame.pack_forget()
         self.topic_selection_frame.pack(fill="both", expand=True)
-        if hasattr(self, 'selected_topic'):
-            del self.selected_topic
+        self.logic.selected_topic = None
 
     def on_closing(self):
-        if self.conn:
-            self.conn.close()
+        self.logic.close_connection()
         self.destroy()
-
 
 if __name__ == "__main__":
     app = App()
