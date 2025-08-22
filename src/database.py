@@ -30,6 +30,8 @@ def create_table(conn, create_table_sql):
     except sqlite3.Error as e:
         print(e)
 
+from knowledge_base import create_knowledge_tables
+
 def main():
     database = "data/learning_data.db"
 
@@ -78,6 +80,9 @@ def main():
 
         # create learning_data table
         create_table(conn, sql_create_learning_data_table)
+
+        # create knowledge base tables
+        create_knowledge_tables(conn)
 
         conn.close()
     else:

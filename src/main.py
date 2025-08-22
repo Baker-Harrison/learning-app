@@ -1,7 +1,12 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from database import (create_connection, add_topic, get_all_topics,
-                    add_concept, get_concepts_for_topic, get_all_topics_with_mastery)
+                    add_concept, get_concepts_for_topic, get_all_topics_with_mastery,
+                    get_next_concept_to_review, record_recall_session,
+                    initialize_learning_data, update_learning_data)
+from knowledge_base import allocate_technique, get_technique_id_by_name, update_concept_learning_progress
+from fsrs import FSRS, default_params
+import datetime
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -46,6 +51,8 @@ class App(tk.Tk):
             return
         self.create_widgets()
         self.populate_topics_list()
+        self.current_concept = None
+        self.current_technique = None
 
     def create_widgets(self):
         self.notebook = ttk.Notebook(self)
@@ -61,10 +68,125 @@ class App(tk.Tk):
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.create_dashboard_widgets(self.dashboard_tab)
 
+        # --- Autonomous Tab ---
+        self.autonomous_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.autonomous_tab, text="Autonomous")
+        self.create_autonomous_widgets(self.autonomous_tab)
+
         # --- Status Bar ---
         self.status_bar = tk.Label(self, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
+    def create_autonomous_widgets(self, parent_frame):
+        # Frame for displaying the next action
+        action_frame = ttk.LabelFrame(parent_frame, text="Next Action")
+        action_frame.pack(padx=10, pady=10, fill="x")
+
+        get_action_button = ttk.Button(action_frame, text="Get Next Action", command=self.get_next_action)
+        get_action_button.pack(pady=5)
+
+        self.concept_label = ttk.Label(action_frame, text="", wraplength=780)
+        self.concept_label.pack(pady=10)
+
+        self.technique_label = ttk.Label(action_frame, text="", font=("tahoma", "10", "bold"))
+        self.technique_label.pack(pady=5)
+
+        # Frame for user response
+        response_frame = ttk.LabelFrame(parent_frame, text="Your Response")
+        response_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        self.response_text = tk.Text(response_frame, height=10, width=80)
+        self.response_text.pack(padx=5, pady=5, fill="both", expand=True)
+
+        submit_button = ttk.Button(response_frame, text="Submit", command=self.submit_response)
+        submit_button.pack(pady=5)
+
+    def get_next_action(self):
+        next_concept = get_next_concept_to_review(self.conn)
+        if next_concept:
+            self.current_concept = next_concept
+            concept_id, _, concept_content = next_concept
+
+            technique = allocate_technique(self.conn, concept_id)
+            self.current_technique = technique
+
+            self.concept_label.config(text=f"Concept: {concept_content}")
+            self.technique_label.config(text=f"Technique: {technique}")
+
+            self.response_text.delete('1.0', tk.END)
+        else:
+            self.concept_label.config(text="No concepts to review. Add some new concepts!")
+            self.technique_label.config(text="")
+            self.current_concept = None
+            self.current_technique = None
+
+    def submit_response(self):
+        if not self.current_concept:
+            messagebox.showwarning("No Action", "There is no concept to submit a response for. Please click 'Get Next Action'.")
+            return
+
+        user_response = self.response_text.get("1.0", tk.END).strip()
+        if not user_response:
+            messagebox.showwarning("Empty Response", "Please enter a response.")
+            return
+
+        # For now, we'll use a fixed grade of 'Good' (3)
+        grade = 3
+        concept_id = self.current_concept[0]
+
+        # 1. Record the recall session
+        record_recall_session(self.conn, concept_id, user_response, grade)
+
+        # 2. Update FSRS data
+        fsrs = FSRS(default_params)
+
+        # Check if the concept has existing learning data
+        cur = self.conn.cursor()
+        cur.execute("SELECT difficulty, stability FROM learning_data WHERE concept_id = ?", (concept_id,))
+        result = cur.fetchone()
+
+        if result:
+            # Update existing FSRS data
+            difficulty, stability = result
+
+            # We need the last review date to calculate retrievability
+            cur.execute("""
+                SELECT MAX(rs.timestamp) FROM recall_sessions rs
+                WHERE rs.concept_id = ? AND rs.id != (SELECT MAX(id) FROM recall_sessions WHERE concept_id = ?)
+            """, (concept_id, concept_id))
+            last_review_str = cur.fetchone()[0]
+
+            if last_review_str:
+                last_review_date = datetime.datetime.fromisoformat(last_review_str)
+                days_since_review = (datetime.datetime.now() - last_review_date).days
+            else:
+                # This is the first review after being a new card
+                days_since_review = 0
+
+
+            retrievability = fsrs.retrievability(days_since_review, stability) if last_review_str else 1.0
+
+            new_difficulty = fsrs.new_difficulty(difficulty, grade)
+            new_stability = fsrs.new_stability(new_difficulty, stability, retrievability, grade)
+
+            update_learning_data(self.conn, concept_id, new_difficulty, new_stability)
+            self.status_bar.config(text=f"Updated concept {concept_id}. New D: {new_difficulty:.2f}, S: {new_stability:.2f}")
+
+        else:
+            # Initialize FSRS data for a new concept
+            stability = fsrs.initial_stability(grade)
+            difficulty = fsrs.initial_difficulty(grade)
+            initialize_learning_data(self.conn, concept_id, difficulty, stability)
+            self.status_bar.config(text=f"Initialized concept {concept_id}. D: {difficulty:.2f}, S: {stability:.2f}")
+
+        # 3. Update concept learning progress
+        technique_id = get_technique_id_by_name(self.conn, self.current_technique)
+        if technique_id:
+            update_concept_learning_progress(self.conn, concept_id, technique_id)
+
+        # 4. Get the next action for the user
+        messagebox.showinfo("Success", "Response recorded successfully!")
+        self.get_next_action()
 
     def create_management_widgets(self, parent_frame):
         # Main frames
