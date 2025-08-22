@@ -125,6 +125,9 @@ def add_concept(conn, topic_id, content):
     conn.commit()
     return cur.lastrowid
 
+import datetime
+from fsrs import FSRS, default_params
+
 def get_concepts_for_topic(conn, topic_id):
     """
     Query all concepts for a given topic
@@ -138,6 +141,109 @@ def get_concepts_for_topic(conn, topic_id):
     rows = cur.fetchall()
 
     return rows
+
+def initialize_learning_data(conn, concept_id, difficulty, stability):
+    """
+    Initialize learning data for a new concept.
+    :param conn:
+    :param concept_id:
+    :param difficulty:
+    :param stability:
+    """
+    sql = ''' INSERT INTO learning_data(concept_id, difficulty, stability)
+              VALUES(?,?,?) '''
+    cur = conn.cursor()
+    cur.execute(sql, (concept_id, difficulty, stability))
+    conn.commit()
+
+def update_learning_data(conn, concept_id, difficulty, stability):
+    """
+    Update learning data for a concept.
+    :param conn:
+    :param concept_id:
+    :param difficulty:
+    :param stability:
+    """
+    sql = ''' UPDATE learning_data
+              SET difficulty = ?,
+                  stability = ?
+              WHERE concept_id = ?'''
+    cur = conn.cursor()
+    cur.execute(sql, (difficulty, stability, concept_id))
+    conn.commit()
+
+def record_recall_session(conn, concept_id, user_response, ai_grade):
+    """
+    Record a recall session.
+    :param conn:
+    :param concept_id:
+    :param user_response:
+    :param ai_grade:
+    """
+    sql = ''' INSERT INTO recall_sessions(concept_id, timestamp, user_response, ai_grade)
+              VALUES(?,?,?,?) '''
+    cur = conn.cursor()
+    timestamp = datetime.datetime.now().isoformat()
+    cur.execute(sql, (concept_id, timestamp, user_response, ai_grade))
+    conn.commit()
+
+def get_next_concept_to_review(conn):
+    """
+    Get the next concept to review using the FSRS algorithm.
+
+    This function first looks for new concepts (those not in learning_data).
+    If there are no new concepts, it finds the concept with the lowest
+    retrievability score.
+
+    :param conn: the Connection object
+    :return: The concept to review (id, topic_id, content) or None
+    """
+    cur = conn.cursor()
+
+    # 1. Check for new concepts
+    cur.execute("""
+        SELECT c.id, c.topic_id, c.content
+        FROM concepts c
+        LEFT JOIN learning_data ld ON c.id = ld.concept_id
+        WHERE ld.concept_id IS NULL
+        ORDER BY c.id
+        LIMIT 1
+    """)
+    new_concept = cur.fetchone()
+    if new_concept:
+        return new_concept
+
+    # 2. If no new concepts, find the one with the lowest retrievability
+    fsrs = FSRS(default_params)
+
+    cur.execute("""
+        SELECT
+            ld.concept_id,
+            ld.difficulty,
+            ld.stability,
+            (SELECT MAX(rs.timestamp) FROM recall_sessions rs WHERE rs.concept_id = ld.concept_id) as last_review
+        FROM learning_data ld
+    """)
+
+    concepts_to_review = []
+    for concept_id, difficulty, stability, last_review_str in cur.fetchall():
+        if last_review_str:
+            last_review_date = datetime.datetime.fromisoformat(last_review_str)
+            days_since_review = (datetime.datetime.now() - last_review_date).days
+
+            retrievability = fsrs.retrievability(days_since_review, stability)
+            concepts_to_review.append((retrievability, concept_id))
+
+    if not concepts_to_review:
+        return None
+
+    # Find the concept with the minimum retrievability
+    min_retrievability_concept_id = min(concepts_to_review, key=lambda x: x[0])[1]
+
+    # Get the full concept details
+    cur.execute("SELECT id, topic_id, content FROM concepts WHERE id = ?", (min_retrievability_concept_id,))
+    return cur.fetchone()
+
 
 if __name__ == '__main__':
     main()
