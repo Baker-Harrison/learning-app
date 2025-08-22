@@ -92,10 +92,14 @@ def add_topic(conn, topic_name):
     """
     sql = ''' INSERT INTO topics(name)
               VALUES(?) '''
-    cur = conn.cursor()
-    cur.execute(sql, (topic_name,))
-    conn.commit()
-    return cur.lastrowid
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (topic_name,))
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.Error as e:
+        print(e)
+        return None
 
 def get_all_topics(conn):
     """
@@ -120,10 +124,14 @@ def add_concept(conn, topic_id, content):
     """
     sql = ''' INSERT INTO concepts(topic_id, content)
               VALUES(?,?) '''
-    cur = conn.cursor()
-    cur.execute(sql, (topic_id, content))
-    conn.commit()
-    return cur.lastrowid
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (topic_id, content))
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.Error as e:
+        print(e)
+        return None
 
 import datetime
 from fsrs import FSRS, default_params
@@ -152,9 +160,12 @@ def initialize_learning_data(conn, concept_id, difficulty, stability):
     """
     sql = ''' INSERT INTO learning_data(concept_id, difficulty, stability)
               VALUES(?,?,?) '''
-    cur = conn.cursor()
-    cur.execute(sql, (concept_id, difficulty, stability))
-    conn.commit()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (concept_id, difficulty, stability))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(e)
 
 def update_learning_data(conn, concept_id, difficulty, stability):
     """
@@ -168,9 +179,12 @@ def update_learning_data(conn, concept_id, difficulty, stability):
               SET difficulty = ?,
                   stability = ?
               WHERE concept_id = ?'''
-    cur = conn.cursor()
-    cur.execute(sql, (difficulty, stability, concept_id))
-    conn.commit()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (difficulty, stability, concept_id))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(e)
 
 def record_recall_session(conn, concept_id, user_response, ai_grade):
     """
@@ -182,10 +196,13 @@ def record_recall_session(conn, concept_id, user_response, ai_grade):
     """
     sql = ''' INSERT INTO recall_sessions(concept_id, timestamp, user_response, ai_grade)
               VALUES(?,?,?,?) '''
-    cur = conn.cursor()
-    timestamp = datetime.datetime.now().isoformat()
-    cur.execute(sql, (concept_id, timestamp, user_response, ai_grade))
-    conn.commit()
+    try:
+        cur = conn.cursor()
+        timestamp = datetime.datetime.now().isoformat()
+        cur.execute(sql, (concept_id, timestamp, user_response, ai_grade))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(e)
 
 def get_next_concept_to_review(conn):
     """
